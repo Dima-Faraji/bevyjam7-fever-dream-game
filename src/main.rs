@@ -25,6 +25,12 @@ fn main() {
                     ..default()
                 }),
         )
+        // Camera for UI + 2D sprites
+        .add_systems(Startup, setup_camera)
         .add_plugins(GamePlugin)
         .run();
+}
+
+fn setup_camera(mut commands: Commands) {
+    commands.spawn(Camera2d);
 }

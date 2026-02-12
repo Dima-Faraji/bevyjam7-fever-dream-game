@@ -1,26 +1,23 @@
-#![allow(clippy::type_complexity)]
+use bevy::prelude::*;
 
-mod actions;
-mod audio;
 mod loading;
 mod menu;
 mod player;
+mod actions;
 
-use crate::actions::ActionsPlugin;
-use crate::audio::InternalAudioPlugin;
-use crate::loading::LoadingPlugin;
-use crate::menu::MenuPlugin;
-use crate::player::PlayerPlugin;
+pub use loading::*;
+pub use menu::*;
+pub use player::*;
+pub use actions::*;
 
-use bevy::app::App;
-use bevy::prelude::*;
-
-#[derive(States, Default, Clone, Eq, PartialEq, Debug, Hash)]
-enum GameState {
+#[derive(States, Default, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum GameState {
     #[default]
     Loading,
-    Playing,
     Menu,
+    Countdown,
+    Playing,
+    GameOver,
 }
 
 pub struct GamePlugin;
@@ -28,17 +25,7 @@ pub struct GamePlugin;
 impl Plugin for GamePlugin {
     fn build(&self, app: &mut App) {
         app.init_state::<GameState>()
-            .add_systems(Startup, setup_camera)
-            .add_plugins((
-                LoadingPlugin,
-                MenuPlugin,
-                ActionsPlugin,
-                InternalAudioPlugin,
-                PlayerPlugin,
-            ));
+            .insert_resource(ClearColor(Color::srgb(0.12, 0.12, 0.12)))
+            .add_plugins((LoadingPlugin, ActionsPlugin, MenuPlugin, PlayerPlugin));
     }
-}
-
-fn setup_camera(mut commands: Commands) {
-    commands.spawn(Camera2d);
 }

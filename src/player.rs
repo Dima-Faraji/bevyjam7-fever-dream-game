@@ -1,26 +1,41 @@
 use crate::actions::Actions;
 use crate::GameState;
+
+use bevy::app::AppExit;
+use bevy::ecs::system::ParamSet;
 use bevy::prelude::*;
 
+/// Gameplay + countdown + game over
 pub struct PlayerPlugin;
 
 #[derive(Component)]
 pub struct Player;
 
 #[derive(Component)]
-struct PlayingEntity;
-
-#[derive(Component)]
 struct WorldBounds;
 
 #[derive(Component)]
-struct MoodText;
+struct PlayingEntity; // tag EVERYTHING spawned for Countdown/Playing
 
 #[derive(Component)]
-struct ScoreText;
+struct GameOverEntity; // tag EVERYTHING spawned for GameOver overlay
 
 #[derive(Component)]
-struct TimerText;
+struct HudMood;
+#[derive(Component)]
+struct HudScore;
+#[derive(Component)]
+struct HudTime;
+#[derive(Component)]
+struct HurryText;
+
+#[derive(Component)]
+struct CountdownText;
+
+#[derive(Component)]
+struct ReplayButton;
+#[derive(Component)]
+struct QuitButton;
 
 #[derive(Component)]
 struct Memory;
@@ -39,59 +54,70 @@ impl Default for Mood {
 }
 
 #[derive(Resource, Default)]
-pub struct Score(pub u32);
+struct Score(pub u32);
 
 #[derive(Resource)]
-pub struct RoundTimer(pub Timer);
+struct CountdownTimer(pub Timer);
 
-impl Default for RoundTimer {
-    fn default() -> Self {
-        Self(Timer::from_seconds(30.0, TimerMode::Once))
-    }
-}
+#[derive(Resource)]
+struct GameTimer(pub Timer);
+
+#[derive(Resource, Default)]
+struct LowTimeAlerted(pub bool);
 
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Mood>()
             .init_resource::<Score>()
-            .init_resource::<RoundTimer>()
-            .add_systems(
-                OnEnter(GameState::Playing),
-                (
-                    reset_round,
-                    setup_playing_world,
-                    spawn_player,
-                    spawn_hud,
-                    spawn_memories,
-                ),
-            )
-            .add_systems(
-                Update,
-                (
-                    mood_input,
-                    move_player,
-                    clamp_player,
-                    collect_memories,
-                    tick_timer,
-                    update_hud,
-                    check_round_end,
-                )
-                    .run_if(in_state(GameState::Playing)),
-            )
-            .add_systems(OnExit(GameState::Playing), cleanup_playing);
+            .init_resource::<LowTimeAlerted>()
+            // Enter states
+            .add_systems(OnEnter(GameState::Countdown), enter_countdown)
+            .add_systems(OnEnter(GameState::Playing), enter_playing)
+            .add_systems(OnEnter(GameState::GameOver), setup_game_over)
+            // Update systems (always scheduled; gated internally by State<GameState>)
+            .add_systems(Update, tick_countdown)
+            .add_systems(Update, countdown_input_skip)
+            .add_systems(Update, mood_input)
+            .add_systems(Update, move_player)
+            .add_systems(Update, clamp_player)
+            .add_systems(Update, collect_memories)
+            .add_systems(Update, tick_game_timer)
+            .add_systems(Update, update_hud)
+            .add_systems(Update, check_game_over)
+            .add_systems(Update, game_over_input_keys)
+            .add_systems(Update, game_over_buttons)
+            // Cleanup when leaving game over (this is where we also remove the play world)
+            .add_systems(OnExit(GameState::GameOver), cleanup_game_over)
+            .add_systems(OnExit(GameState::GameOver), cleanup_play_world);
     }
 }
 
-fn reset_round(mut score: ResMut<Score>, mut timer: ResMut<RoundTimer>, mut mood: ResMut<Mood>) {
-    score.0 = 0;
-    timer.0.reset();
-    *mood = Mood::Normal;
-}
+/* ----------------------- ENTER COUNTDOWN ----------------------- */
 
-fn setup_playing_world(mut commands: Commands) {
-    let half_w = 420.0;
-    let half_h = 260.0;
-    let wall_thickness = 20.0;
+fn enter_countdown(
+    mut commands: Commands,
+    mut score: ResMut<Score>,
+    mut mood: ResMut<Mood>,
+    mut alerted: ResMut<LowTimeAlerted>,
+    q_play: Query<Entity, With<PlayingEntity>>,
+    q_over: Query<Entity, With<GameOverEntity>>,
+) {
+    // Safety cleanup (prevents duplicates if something went wrong earlier)
+    for e in &q_over {
+        commands.entity(e).despawn();
+    }
+    for e in &q_play {
+        commands.entity(e).despawn();
+    }
+
+    // Reset run data
+    score.0 = 0;
+    *mood = Mood::Normal;
+    alerted.0 = false;
+
+    // Build world
+    let half_w = 520.0;
+    let half_h = 300.0;
 
     commands.spawn((
         PlayingEntity,
@@ -102,54 +128,59 @@ fn setup_playing_world(mut commands: Commands) {
         InheritedVisibility::default(),
     ));
 
-    let wall_color = Color::srgb(0.18, 0.18, 0.18);
+    // background
+    commands.spawn((
+        PlayingEntity,
+        Sprite {
+            color: Color::srgb(0.18, 0.18, 0.20),
+            custom_size: Some(Vec2::new(half_w * 2.0, half_h * 2.0)),
+            ..default()
+        },
+        Transform::from_xyz(0.0, 0.0, 0.0),
+    ));
 
-    // floor
+    // border walls
+    let wall = 22.0;
+    let wall_color = Color::srgb(0.10, 0.10, 0.11);
+
     commands.spawn((
         PlayingEntity,
         Sprite {
             color: wall_color,
-            custom_size: Some(Vec2::new(half_w * 2.0 + wall_thickness * 2.0, wall_thickness)),
+            custom_size: Some(Vec2::new(half_w * 2.0 + wall * 2.0, wall)),
             ..default()
         },
-        Transform::from_xyz(0.0, -half_h - wall_thickness / 2.0, 0.5),
+        Transform::from_xyz(0.0, half_h + wall / 2.0, 0.5),
     ));
-
-    // ceiling
     commands.spawn((
         PlayingEntity,
         Sprite {
             color: wall_color,
-            custom_size: Some(Vec2::new(half_w * 2.0 + wall_thickness * 2.0, wall_thickness)),
+            custom_size: Some(Vec2::new(half_w * 2.0 + wall * 2.0, wall)),
             ..default()
         },
-        Transform::from_xyz(0.0, half_h + wall_thickness / 2.0, 0.5),
+        Transform::from_xyz(0.0, -half_h - wall / 2.0, 0.5),
     ));
-
-    // left wall
     commands.spawn((
         PlayingEntity,
         Sprite {
             color: wall_color,
-            custom_size: Some(Vec2::new(wall_thickness, half_h * 2.0)),
+            custom_size: Some(Vec2::new(wall, half_h * 2.0)),
             ..default()
         },
-        Transform::from_xyz(-half_w - wall_thickness / 2.0, 0.0, 0.5),
+        Transform::from_xyz(-half_w - wall / 2.0, 0.0, 0.5),
     ));
-
-    // right wall
     commands.spawn((
         PlayingEntity,
         Sprite {
             color: wall_color,
-            custom_size: Some(Vec2::new(wall_thickness, half_h * 2.0)),
+            custom_size: Some(Vec2::new(wall, half_h * 2.0)),
             ..default()
         },
-        Transform::from_xyz(half_w + wall_thickness / 2.0, 0.0, 0.5),
+        Transform::from_xyz(half_w + wall / 2.0, 0.0, 0.5),
     ));
-}
 
-fn spawn_player(mut commands: Commands) {
+    // Player
     commands.spawn((
         PlayingEntity,
         Player,
@@ -158,74 +189,178 @@ fn spawn_player(mut commands: Commands) {
             custom_size: Some(Vec2::new(44.0, 44.0)),
             ..default()
         },
-        Transform::from_xyz(0.0, 0.0, 1.0),
+        Transform::from_xyz(-420.0, 0.0, 1.0),
     ));
-}
 
-fn spawn_hud(mut commands: Commands) {
+    // HUD top bar
+    commands
+        .spawn((
+            PlayingEntity,
+            Node {
+                position_type: PositionType::Absolute,
+                top: Val::Px(0.0),
+                left: Val::Px(0.0),
+                width: Val::Percent(100.0),
+                height: Val::Px(64.0),
+                justify_content: JustifyContent::SpaceBetween,
+                align_items: AlignItems::Center,
+                padding: UiRect::horizontal(Val::Px(18.0)),
+                ..default()
+            },
+            BackgroundColor(Color::srgb(0.08, 0.08, 0.09)),
+        ))
+        .with_children(|ui| {
+            ui.spawn((
+                PlayingEntity,
+                HudMood,
+                Text::new("Mood: Normal (1/2/3)"),
+                TextFont { font_size: 26.0, ..default() },
+                TextColor(Color::WHITE),
+            ));
+
+            ui.spawn((
+                PlayingEntity,
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    align_items: AlignItems::FlexEnd,
+                    ..default()
+                },
+            ))
+            .with_children(|right| {
+                right.spawn((
+                    PlayingEntity,
+                    HudScore,
+                    Text::new("Score: 0"),
+                    TextFont { font_size: 26.0, ..default() },
+                    TextColor(Color::WHITE),
+                ));
+                right.spawn((
+                    PlayingEntity,
+                    HudTime,
+                    Text::new("Time: --"),
+                    TextFont { font_size: 22.0, ..default() },
+                    TextColor(Color::WHITE),
+                ));
+            });
+        });
+
+    // Low-time alert text
     commands.spawn((
         PlayingEntity,
-        MoodText,
-        Text::new("Mood: Normal (1/2/3)"),
-        TextFont {
-            font_size: 26.0,
+        HurryText,
+        Text::new(""),
+        TextFont { font_size: 42.0, ..default() },
+        TextColor(Color::srgb(1.0, 0.3, 0.3)),
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(84.0),
+            left: Val::Px(18.0),
             ..default()
         },
+    ));
+
+    // Countdown center text (as its own Text entity to avoid Children iterator pitfalls)
+    commands.spawn((
+        PlayingEntity,
+        CountdownText,
+        Text::new(""),
+        TextFont { font_size: 120.0, ..default() },
         TextColor(Color::WHITE),
         Node {
             position_type: PositionType::Absolute,
-            top: Val::Px(10.0),
-            left: Val::Px(12.0),
+            top: Val::Percent(40.0),
+            left: Val::Percent(0.0),
+            width: Val::Percent(100.0),
             ..default()
         },
     ));
 
-    commands.spawn((
-        PlayingEntity,
-        ScoreText,
-        Text::new("Score: 0"),
-        TextFont {
-            font_size: 26.0,
-            ..default()
-        },
-        TextColor(Color::WHITE),
-        Node {
-            position_type: PositionType::Absolute,
-            top: Val::Px(10.0),
-            right: Val::Px(12.0),
-            ..default()
-        },
-    ));
-
-    commands.spawn((
-        PlayingEntity,
-        TimerText,
-        Text::new("Time: 30.0"),
-        TextFont {
-            font_size: 22.0,
-            ..default()
-        },
-        TextColor(Color::srgb(0.92, 0.92, 0.92)),
-        Node {
-            position_type: PositionType::Absolute,
-            top: Val::Px(44.0),
-            right: Val::Px(12.0),
-            ..default()
-        },
-    ));
+    // Start countdown timer
+    commands.insert_resource(CountdownTimer(Timer::from_seconds(4.0, TimerMode::Once)));
 }
 
-fn spawn_memories(mut commands: Commands) {
+/* ----------------------- COUNTDOWN UPDATE ----------------------- */
+
+fn tick_countdown(
+    state: Res<State<GameState>>,
+    time: Res<Time>,
+    mut timer: Option<ResMut<CountdownTimer>>,
+    mut next_state: ResMut<NextState<GameState>>,
+    mut q_text: Query<&mut Text, With<CountdownText>>,
+) {
+    if *state.get() != GameState::Countdown {
+        return;
+    }
+
+    let Some(mut timer) = timer else { return; };
+    timer.0.tick(time.delta());
+
+    let remaining = (4.0 - timer.0.elapsed_secs()).ceil().max(0.0) as i32;
+    let msg = match remaining {
+        4 => "3",
+        3 => "2",
+        2 => "1",
+        1 => "GO!",
+        _ => "",
+    };
+
+    for mut t in &mut q_text {
+        *t = Text::new(msg);
+    }
+
+    if timer.0.just_finished() {
+        next_state.set(GameState::Playing);
+    }
+}
+
+fn countdown_input_skip(
+    state: Res<State<GameState>>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut next_state: ResMut<NextState<GameState>>,
+) {
+    if *state.get() != GameState::Countdown {
+        return;
+    }
+
+    if keys.just_pressed(KeyCode::Space) || keys.just_pressed(KeyCode::Enter) {
+        next_state.set(GameState::Playing);
+    }
+}
+
+/* ----------------------- ENTER PLAYING ----------------------- */
+
+fn enter_playing(
+    mut commands: Commands,
+    bounds_q: Query<&Transform, With<WorldBounds>>,
+    q_mem: Query<Entity, With<Memory>>,
+    mut q_cd: Query<&mut Text, With<CountdownText>>,
+) {
+    // Clear countdown text
+    for mut t in &mut q_cd {
+        *t = Text::new("");
+    }
+
+    // Remove any leftover memories (safety)
+    for e in &q_mem {
+        commands.entity(e).despawn();
+    }
+
+    // More time (45 seconds)
+    commands.insert_resource(GameTimer(Timer::from_seconds(45.0, TimerMode::Once)));
+
+    // Spawn memories
+    let Ok(bounds) = bounds_q.single() else { return; };
+    let half_w = bounds.translation.x;
+    let half_h = bounds.translation.y;
+
     let points = [
-        Vec2::new(-260.0, 160.0),
-        Vec2::new(260.0, 160.0),
-        Vec2::new(-260.0, -160.0),
-        Vec2::new(260.0, -160.0),
+        Vec2::new(-half_w + 120.0, half_h - 90.0),
+        Vec2::new(-80.0, half_h - 60.0),
+        Vec2::new(half_w - 140.0, half_h - 140.0),
+        Vec2::new(half_w - 160.0, -half_h + 120.0),
+        Vec2::new(-half_w + 170.0, -half_h + 110.0),
+        Vec2::new(40.0, -half_h + 90.0),
         Vec2::new(0.0, 0.0),
-        Vec2::new(0.0, 200.0),
-        Vec2::new(0.0, -200.0),
-        Vec2::new(-340.0, 0.0),
-        Vec2::new(340.0, 0.0),
     ];
 
     for p in points {
@@ -233,8 +368,8 @@ fn spawn_memories(mut commands: Commands) {
             PlayingEntity,
             Memory,
             Sprite {
-                color: Color::srgb(0.35, 0.85, 0.95),
-                custom_size: Some(Vec2::new(18.0, 18.0)),
+                color: Color::srgb(0.35, 0.9, 0.95),
+                custom_size: Some(Vec2::new(22.0, 22.0)),
                 ..default()
             },
             Transform::from_xyz(p.x, p.y, 1.0),
@@ -242,7 +377,13 @@ fn spawn_memories(mut commands: Commands) {
     }
 }
 
-fn mood_input(keys: Res<ButtonInput<KeyCode>>, mut mood: ResMut<Mood>) {
+/* ----------------------- PLAYING UPDATE ----------------------- */
+
+fn mood_input(state: Res<State<GameState>>, keys: Res<ButtonInput<KeyCode>>, mut mood: ResMut<Mood>) {
+    if *state.get() != GameState::Playing {
+        return;
+    }
+
     if keys.just_pressed(KeyCode::Digit1) {
         *mood = Mood::Normal;
     } else if keys.just_pressed(KeyCode::Digit2) {
@@ -253,22 +394,26 @@ fn mood_input(keys: Res<ButtonInput<KeyCode>>, mut mood: ResMut<Mood>) {
 }
 
 fn move_player(
+    state: Res<State<GameState>>,
     time: Res<Time>,
     actions: Res<Actions>,
     mood: Res<Mood>,
     mut player_q: Query<&mut Transform, With<Player>>,
 ) {
+    if *state.get() != GameState::Playing {
+        return;
+    }
+
     let Ok(mut t) = player_q.single_mut() else { return; };
 
     let dt = time.delta_secs();
-    let base_speed = 260.0;
-
+    let base_speed = 280.0;
     let input = actions.player_movement.unwrap_or(Vec2::ZERO);
 
-    let (speed_mul, gravity_vec) = match *mood {
+    let (speed_mul, gravity): (f32, Vec2) = match *mood {
         Mood::Normal => (1.0, Vec2::new(0.0, -60.0)),
         Mood::Heavy => (0.75, Vec2::new(0.0, -140.0)),
-        Mood::Sideways => (0.9, Vec2::new(-140.0, 0.0)),
+        Mood::Sideways => (0.9, Vec2::new(-120.0, 0.0)),
     };
 
     let input = match *mood {
@@ -277,90 +422,311 @@ fn move_player(
     };
 
     let move_step = input * (base_speed * speed_mul) * dt;
-    let gravity_step = gravity_vec * dt;
+    let gravity_step = gravity * dt;
 
     t.translation += Vec3::new(move_step.x + gravity_step.x, move_step.y + gravity_step.y, 0.0);
 }
 
 fn clamp_player(
+    state: Res<State<GameState>>,
     bounds_q: Query<&Transform, (With<WorldBounds>, Without<Player>)>,
     mut player_q: Query<&mut Transform, (With<Player>, Without<WorldBounds>)>,
 ) {
-    let Ok(bounds_t) = bounds_q.single() else { return; };
-    let Ok(mut player_t) = player_q.single_mut() else { return; };
+    if *state.get() != GameState::Playing {
+        return;
+    }
 
-    let half_w = bounds_t.translation.x;
-    let half_h = bounds_t.translation.y;
+    let Ok(bounds) = bounds_q.single() else { return; };
+    let Ok(mut p) = player_q.single_mut() else { return; };
 
+    let half_w = bounds.translation.x;
+    let half_h = bounds.translation.y;
     let margin = 28.0;
-    player_t.translation.x = player_t.translation.x.clamp(-half_w + margin, half_w - margin);
-    player_t.translation.y = player_t.translation.y.clamp(-half_h + margin, half_h - margin);
+
+    p.translation.x = p.translation.x.clamp(-half_w + margin, half_w - margin);
+    p.translation.y = p.translation.y.clamp(-half_h + margin, half_h - margin);
 }
 
 fn collect_memories(
+    state: Res<State<GameState>>,
     mut commands: Commands,
-    mut score: ResMut<Score>,
     player_q: Query<&Transform, With<Player>>,
     memories_q: Query<(Entity, &Transform), With<Memory>>,
+    mut score: ResMut<Score>,
 ) {
-    let Ok(player_t) = player_q.single() else { return; };
+    if *state.get() != GameState::Playing {
+        return;
+    }
 
-    let pickup_dist2 = 34.0 * 34.0;
+    let Ok(p) = player_q.single() else { return; };
+    let pr = 26.0;
+
     for (e, t) in &memories_q {
-        let d2 = player_t.translation.truncate().distance_squared(t.translation.truncate());
-        if d2 <= pickup_dist2 {
+        let d = p.translation.truncate().distance(t.translation.truncate());
+        if d <= pr {
             score.0 += 1;
             commands.entity(e).despawn();
         }
     }
 }
 
-fn tick_timer(time: Res<Time>, mut timer: ResMut<RoundTimer>) {
+fn tick_game_timer(state: Res<State<GameState>>, time: Res<Time>, timer: Option<ResMut<GameTimer>>) {
+    if *state.get() != GameState::Playing {
+        return;
+    }
+    let Some(mut timer) = timer else { return; };
     timer.0.tick(time.delta());
 }
 
+/* ----------------------- HUD UPDATE (FIXED WITH ParamSet) ----------------------- */
+
 fn update_hud(
+    state: Res<State<GameState>>,
     mood: Res<Mood>,
     score: Res<Score>,
-    timer: Res<RoundTimer>,
+    timer: Option<Res<GameTimer>>,
+    mut alerted: ResMut<LowTimeAlerted>,
     mut set: ParamSet<(
-        Query<&mut Text, With<MoodText>>,
-        Query<&mut Text, With<ScoreText>>,
-        Query<&mut Text, With<TimerText>>,
+        Query<&mut Text, With<HudMood>>,
+        Query<&mut Text, With<HudScore>>,
+        Query<(&mut Text, &mut TextColor), With<HudTime>>,
+        Query<&mut Text, With<HurryText>>,
     )>,
 ) {
+    // Update HUD in BOTH Countdown and Playing
+    if *state.get() != GameState::Playing && *state.get() != GameState::Countdown {
+        return;
+    }
+
     let mood_label = match *mood {
         Mood::Normal => "Normal",
         Mood::Heavy => "Heavy",
         Mood::Sideways => "Sideways",
     };
 
-    for mut t in &mut set.p0() {
+    for mut t in set.p0().iter_mut() {
         *t = Text::new(format!("Mood: {mood_label} (1/2/3)"));
     }
 
-    for mut t in &mut set.p1() {
+    for mut t in set.p1().iter_mut() {
         *t = Text::new(format!("Score: {}", score.0));
     }
 
-    let secs_left = (timer.0.duration().as_secs_f32() - timer.0.elapsed_secs()).max(0.0);
-    for mut t in &mut set.p2() {
-        *t = Text::new(format!("Time: {:.1}", secs_left));
+    if *state.get() == GameState::Countdown {
+        for (mut t, mut color) in set.p2().iter_mut() {
+            *t = Text::new("Time: --");
+            color.0 = Color::WHITE;
+        }
+        for mut ht in set.p3().iter_mut() {
+            *ht = Text::new("");
+        }
+        return;
+    }
+
+    if let Some(timer) = timer {
+        let total = timer.0.duration().as_secs_f32();
+        let elapsed = timer.0.elapsed_secs();
+        let remaining = (total - elapsed).max(0.0);
+
+        for (mut t, mut color) in set.p2().iter_mut() {
+            *t = Text::new(format!("Time: {:.1}", remaining));
+            if remaining <= 7.0 {
+                color.0 = Color::srgb(1.0, 0.3, 0.3);
+                alerted.0 = true;
+            } else {
+                color.0 = Color::WHITE;
+            }
+        }
+
+        for mut ht in set.p3().iter_mut() {
+            if remaining <= 7.0 {
+                *ht = Text::new("HURRY UP!");
+            } else {
+                *ht = Text::new("");
+            }
+        }
     }
 }
 
-fn check_round_end(
-    mut next_state: ResMut<NextState<GameState>>,
-    timer: Res<RoundTimer>,
+fn check_game_over(
+    state: Res<State<GameState>>,
+    timer: Option<Res<GameTimer>>,
     memories_q: Query<Entity, With<Memory>>,
+    mut next_state: ResMut<NextState<GameState>>,
 ) {
-    // ✅ Bevy 0.18 safe:
+    if *state.get() != GameState::Playing {
+        return;
+    }
+    let Some(timer) = timer else { return; };
+
     if timer.0.just_finished() || memories_q.is_empty() {
-        next_state.set(GameState::Menu);
+        next_state.set(GameState::GameOver);
     }
 }
 
-fn cleanup_playing(mut commands: Commands, q: Query<Entity, With<PlayingEntity>>) {
+/* ----------------------- GAME OVER ----------------------- */
+
+fn setup_game_over(mut commands: Commands, score: Res<Score>) {
+    commands
+        .spawn((
+            GameOverEntity,
+            Node {
+                position_type: PositionType::Absolute,
+                top: Val::Px(0.0),
+                left: Val::Px(0.0),
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.75)),
+        ))
+        .with_children(|ui| {
+            ui.spawn((
+                GameOverEntity,
+                Node {
+                    width: Val::Px(520.0),
+                    padding: UiRect::all(Val::Px(24.0)),
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(14.0),
+                    align_items: AlignItems::Center,
+                    ..default()
+                },
+                BackgroundColor(Color::srgb(0.10, 0.10, 0.12)),
+            ))
+            .with_children(|card| {
+                card.spawn((
+                    GameOverEntity,
+                    Text::new("Time’s up."),
+                    TextFont { font_size: 54.0, ..default() },
+                    TextColor(Color::WHITE),
+                ));
+
+                card.spawn((
+                    GameOverEntity,
+                    Text::new(format!("Final Score: {}", score.0)),
+                    TextFont { font_size: 34.0, ..default() },
+                    TextColor(Color::WHITE),
+                ));
+
+                card.spawn((
+                    GameOverEntity,
+                    Text::new("R = Replay    Q/Esc = Quit"),
+                    TextFont { font_size: 18.0, ..default() },
+                    TextColor(Color::srgb(0.85, 0.85, 0.85)),
+                ));
+
+                card.spawn((
+                    GameOverEntity,
+                    Node {
+                        flex_direction: FlexDirection::Row,
+                        column_gap: Val::Px(14.0),
+                        margin: UiRect::top(Val::Px(10.0)),
+                        ..default()
+                    },
+                ))
+                .with_children(|row| {
+                    row.spawn((
+                        GameOverEntity,
+                        Button,
+                        ReplayButton,
+                        BackgroundColor(Color::srgb(0.18, 0.18, 0.20)),
+                        Node {
+                            width: Val::Px(180.0),
+                            height: Val::Px(56.0),
+                            align_items: AlignItems::Center,
+                            justify_content: JustifyContent::Center,
+                            ..default()
+                        },
+                    ))
+                    .with_child((
+                        GameOverEntity,
+                        Text::new("Replay"),
+                        TextFont { font_size: 28.0, ..default() },
+                        TextColor(Color::WHITE),
+                    ));
+
+                    row.spawn((
+                        GameOverEntity,
+                        Button,
+                        QuitButton,
+                        BackgroundColor(Color::srgb(0.18, 0.18, 0.20)),
+                        Node {
+                            width: Val::Px(180.0),
+                            height: Val::Px(56.0),
+                            align_items: AlignItems::Center,
+                            justify_content: JustifyContent::Center,
+                            ..default()
+                        },
+                    ))
+                    .with_child((
+                        GameOverEntity,
+                        Text::new("Quit"),
+                        TextFont { font_size: 28.0, ..default() },
+                        TextColor(Color::WHITE),
+                    ));
+                });
+            });
+        });
+}
+
+fn game_over_input_keys(
+    state: Res<State<GameState>>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut next_state: ResMut<NextState<GameState>>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    if *state.get() != GameState::GameOver {
+        return;
+    }
+
+    if keys.just_pressed(KeyCode::KeyR) {
+        next_state.set(GameState::Countdown);
+    }
+
+    if keys.just_pressed(KeyCode::KeyQ) || keys.just_pressed(KeyCode::Escape) {
+        exit.write(AppExit::Success);
+    }
+}
+
+fn game_over_buttons(
+    state: Res<State<GameState>>,
+    mut q: Query<
+        (&Interaction, &mut BackgroundColor, Option<&ReplayButton>, Option<&QuitButton>),
+        (Changed<Interaction>, With<Button>, With<GameOverEntity>),
+    >,
+    mut next_state: ResMut<NextState<GameState>>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    if *state.get() != GameState::GameOver {
+        return;
+    }
+
+    for (i, mut bg, replay, quit) in &mut q {
+        match *i {
+            Interaction::Pressed => {
+                if replay.is_some() {
+                    next_state.set(GameState::Countdown);
+                } else if quit.is_some() {
+                    exit.write(AppExit::Success);
+                }
+            }
+            Interaction::Hovered => *bg = BackgroundColor(Color::srgb(0.24, 0.24, 0.26)),
+            Interaction::None => *bg = BackgroundColor(Color::srgb(0.18, 0.18, 0.20)),
+        }
+    }
+}
+
+/* ----------------------- CLEANUP ----------------------- */
+
+fn cleanup_play_world(mut commands: Commands, q: Query<Entity, With<PlayingEntity>>) {
+    for e in &q {
+        commands.entity(e).despawn();
+    }
+}
+
+fn cleanup_game_over(mut commands: Commands, q: Query<Entity, With<GameOverEntity>>) {
     for e in &q {
         commands.entity(e).despawn();
     }
