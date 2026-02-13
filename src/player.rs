@@ -1,7 +1,8 @@
 use crate::actions::Actions;
-use crate::GameState;
+use crate::{Difficulty, GameConfig, GameState};
 
 use bevy::app::AppExit;
+use bevy::ecs::message::MessageWriter;
 use bevy::ecs::system::ParamSet;
 use bevy::prelude::*;
 
@@ -13,6 +14,12 @@ pub struct Player;
 
 #[derive(Component)]
 struct WorldBounds;
+
+#[derive(Component)]
+struct BackToMenuButton;
+
+#[derive(Component)]
+struct DifficultyChoiceButton(Difficulty);
 
 #[derive(Component)]
 struct PlayingEntity; // tag EVERYTHING spawned for Countdown/Playing
@@ -86,6 +93,7 @@ impl Plugin for PlayerPlugin {
             .add_systems(Update, check_game_over)
             .add_systems(Update, game_over_input_keys)
             .add_systems(Update, game_over_buttons)
+            .add_systems(Update, game_over_visuals)
             // Cleanup when leaving game over (this is where we also remove the play world)
             .add_systems(OnExit(GameState::GameOver), cleanup_game_over)
             .add_systems(OnExit(GameState::GameOver), cleanup_play_world);
@@ -214,7 +222,10 @@ fn enter_countdown(
                 PlayingEntity,
                 HudMood,
                 Text::new("Mood: Normal (1/2/3)"),
-                TextFont { font_size: 26.0, ..default() },
+                TextFont {
+                    font_size: 26.0,
+                    ..default()
+                },
                 TextColor(Color::WHITE),
             ));
 
@@ -231,14 +242,20 @@ fn enter_countdown(
                     PlayingEntity,
                     HudScore,
                     Text::new("Score: 0"),
-                    TextFont { font_size: 26.0, ..default() },
+                    TextFont {
+                        font_size: 26.0,
+                        ..default()
+                    },
                     TextColor(Color::WHITE),
                 ));
                 right.spawn((
                     PlayingEntity,
                     HudTime,
                     Text::new("Time: --"),
-                    TextFont { font_size: 22.0, ..default() },
+                    TextFont {
+                        font_size: 22.0,
+                        ..default()
+                    },
                     TextColor(Color::WHITE),
                 ));
             });
@@ -249,7 +266,10 @@ fn enter_countdown(
         PlayingEntity,
         HurryText,
         Text::new(""),
-        TextFont { font_size: 42.0, ..default() },
+        TextFont {
+            font_size: 42.0,
+            ..default()
+        },
         TextColor(Color::srgb(1.0, 0.3, 0.3)),
         Node {
             position_type: PositionType::Absolute,
@@ -259,12 +279,15 @@ fn enter_countdown(
         },
     ));
 
-    // Countdown center text (as its own Text entity to avoid Children iterator pitfalls)
+    // Countdown center text
     commands.spawn((
         PlayingEntity,
         CountdownText,
         Text::new(""),
-        TextFont { font_size: 120.0, ..default() },
+        TextFont {
+            font_size: 120.0,
+            ..default()
+        },
         TextColor(Color::WHITE),
         Node {
             position_type: PositionType::Absolute,
@@ -292,7 +315,9 @@ fn tick_countdown(
         return;
     }
 
-    let Some(mut timer) = timer else { return; };
+    let Some(mut timer) = timer else {
+        return;
+    };
     timer.0.tick(time.delta());
 
     let remaining = (4.0 - timer.0.elapsed_secs()).ceil().max(0.0) as i32;
@@ -331,6 +356,7 @@ fn countdown_input_skip(
 
 fn enter_playing(
     mut commands: Commands,
+    config: Res<GameConfig>,
     bounds_q: Query<&Transform, With<WorldBounds>>,
     q_mem: Query<Entity, With<Memory>>,
     mut q_cd: Query<&mut Text, With<CountdownText>>,
@@ -345,15 +371,21 @@ fn enter_playing(
         commands.entity(e).despawn();
     }
 
-    // More time (45 seconds)
-    commands.insert_resource(GameTimer(Timer::from_seconds(45.0, TimerMode::Once)));
+    // Difficulty affects time + number of memories
+    let time_limit = match config.difficulty {
+        Difficulty::Easy => 60.0,
+        Difficulty::Normal => 45.0,
+        Difficulty::Hard => 30.0,
+    };
+    commands.insert_resource(GameTimer(Timer::from_seconds(time_limit, TimerMode::Once)));
 
-    // Spawn memories
-    let Ok(bounds) = bounds_q.single() else { return; };
+    let Ok(bounds) = bounds_q.single() else {
+        return;
+    };
     let half_w = bounds.translation.x;
     let half_h = bounds.translation.y;
 
-    let points = [
+    let mut points = vec![
         Vec2::new(-half_w + 120.0, half_h - 90.0),
         Vec2::new(-80.0, half_h - 60.0),
         Vec2::new(half_w - 140.0, half_h - 140.0),
@@ -362,6 +394,19 @@ fn enter_playing(
         Vec2::new(40.0, -half_h + 90.0),
         Vec2::new(0.0, 0.0),
     ];
+
+    match config.difficulty {
+        Difficulty::Easy => points.truncate(5),
+        Difficulty::Normal => {}
+        Difficulty::Hard => {
+            points.extend([
+                Vec2::new(-half_w + 260.0, 40.0),
+                Vec2::new(half_w - 240.0, -20.0),
+                Vec2::new(0.0, half_h - 170.0),
+                Vec2::new(0.0, -half_h + 170.0),
+            ]);
+        }
+    }
 
     for p in points {
         commands.spawn((
@@ -379,7 +424,11 @@ fn enter_playing(
 
 /* ----------------------- PLAYING UPDATE ----------------------- */
 
-fn mood_input(state: Res<State<GameState>>, keys: Res<ButtonInput<KeyCode>>, mut mood: ResMut<Mood>) {
+fn mood_input(
+    state: Res<State<GameState>>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut mood: ResMut<Mood>,
+) {
     if *state.get() != GameState::Playing {
         return;
     }
@@ -404,7 +453,9 @@ fn move_player(
         return;
     }
 
-    let Ok(mut t) = player_q.single_mut() else { return; };
+    let Ok(mut t) = player_q.single_mut() else {
+        return;
+    };
 
     let dt = time.delta_secs();
     let base_speed = 280.0;
@@ -424,7 +475,11 @@ fn move_player(
     let move_step = input * (base_speed * speed_mul) * dt;
     let gravity_step = gravity * dt;
 
-    t.translation += Vec3::new(move_step.x + gravity_step.x, move_step.y + gravity_step.y, 0.0);
+    t.translation += Vec3::new(
+        move_step.x + gravity_step.x,
+        move_step.y + gravity_step.y,
+        0.0,
+    );
 }
 
 fn clamp_player(
@@ -436,8 +491,12 @@ fn clamp_player(
         return;
     }
 
-    let Ok(bounds) = bounds_q.single() else { return; };
-    let Ok(mut p) = player_q.single_mut() else { return; };
+    let Ok(bounds) = bounds_q.single() else {
+        return;
+    };
+    let Ok(mut p) = player_q.single_mut() else {
+        return;
+    };
 
     let half_w = bounds.translation.x;
     let half_h = bounds.translation.y;
@@ -458,7 +517,9 @@ fn collect_memories(
         return;
     }
 
-    let Ok(p) = player_q.single() else { return; };
+    let Ok(p) = player_q.single() else {
+        return;
+    };
     let pr = 26.0;
 
     for (e, t) in &memories_q {
@@ -470,15 +531,21 @@ fn collect_memories(
     }
 }
 
-fn tick_game_timer(state: Res<State<GameState>>, time: Res<Time>, timer: Option<ResMut<GameTimer>>) {
+fn tick_game_timer(
+    state: Res<State<GameState>>,
+    time: Res<Time>,
+    timer: Option<ResMut<GameTimer>>,
+) {
     if *state.get() != GameState::Playing {
         return;
     }
-    let Some(mut timer) = timer else { return; };
+    let Some(mut timer) = timer else {
+        return;
+    };
     timer.0.tick(time.delta());
 }
 
-/* ----------------------- HUD UPDATE (FIXED WITH ParamSet) ----------------------- */
+/* ----------------------- HUD UPDATE ----------------------- */
 
 fn update_hud(
     state: Res<State<GameState>>,
@@ -493,7 +560,6 @@ fn update_hud(
         Query<&mut Text, With<HurryText>>,
     )>,
 ) {
-    // Update HUD in BOTH Countdown and Playing
     if *state.get() != GameState::Playing && *state.get() != GameState::Countdown {
         return;
     }
@@ -539,11 +605,7 @@ fn update_hud(
         }
 
         for mut ht in set.p3().iter_mut() {
-            if remaining <= 7.0 {
-                *ht = Text::new("HURRY UP!");
-            } else {
-                *ht = Text::new("");
-            }
+            *ht = Text::new(if remaining <= 7.0 { "HURRY UP!" } else { "" });
         }
     }
 }
@@ -557,7 +619,9 @@ fn check_game_over(
     if *state.get() != GameState::Playing {
         return;
     }
-    let Some(timer) = timer else { return; };
+    let Some(timer) = timer else {
+        return;
+    };
 
     if timer.0.just_finished() || memories_q.is_empty() {
         next_state.set(GameState::GameOver);
@@ -566,7 +630,13 @@ fn check_game_over(
 
 /* ----------------------- GAME OVER ----------------------- */
 
-fn setup_game_over(mut commands: Commands, score: Res<Score>) {
+fn setup_game_over(mut commands: Commands, score: Res<Score>, config: Res<GameConfig>) {
+    let name = if config.player_name.trim().is_empty() {
+        "Player"
+    } else {
+        config.player_name.trim()
+    };
+
     commands
         .spawn((
             GameOverEntity,
@@ -586,11 +656,12 @@ fn setup_game_over(mut commands: Commands, score: Res<Score>) {
             ui.spawn((
                 GameOverEntity,
                 Node {
-                    width: Val::Px(520.0),
+                    width: Val::Px(620.0),
                     padding: UiRect::all(Val::Px(24.0)),
                     flex_direction: FlexDirection::Column,
                     row_gap: Val::Px(14.0),
                     align_items: AlignItems::Center,
+                    border_radius: BorderRadius::all(Val::Px(16.0)),
                     ..default()
                 },
                 BackgroundColor(Color::srgb(0.10, 0.10, 0.12)),
@@ -598,30 +669,77 @@ fn setup_game_over(mut commands: Commands, score: Res<Score>) {
             .with_children(|card| {
                 card.spawn((
                     GameOverEntity,
-                    Text::new("Time’s up."),
-                    TextFont { font_size: 54.0, ..default() },
+                    Text::new(format!("Nice run, {name}.")),
+                    TextFont {
+                        font_size: 44.0,
+                        ..default()
+                    },
                     TextColor(Color::WHITE),
                 ));
 
                 card.spawn((
                     GameOverEntity,
                     Text::new(format!("Final Score: {}", score.0)),
-                    TextFont { font_size: 34.0, ..default() },
+                    TextFont {
+                        font_size: 30.0,
+                        ..default()
+                    },
                     TextColor(Color::WHITE),
                 ));
 
                 card.spawn((
                     GameOverEntity,
-                    Text::new("R = Replay    Q/Esc = Quit"),
-                    TextFont { font_size: 18.0, ..default() },
+                    Text::new("Play again? Pick a difficulty:"),
+                    TextFont {
+                        font_size: 18.0,
+                        ..default()
+                    },
                     TextColor(Color::srgb(0.85, 0.85, 0.85)),
                 ));
 
+                // Difficulty row
                 card.spawn((
                     GameOverEntity,
                     Node {
                         flex_direction: FlexDirection::Row,
-                        column_gap: Val::Px(14.0),
+                        column_gap: Val::Px(12.0),
+                        ..default()
+                    },
+                ))
+                .with_children(|row| {
+                    for d in [Difficulty::Easy, Difficulty::Normal, Difficulty::Hard] {
+                        row.spawn((
+                            GameOverEntity,
+                            Button,
+                            DifficultyChoiceButton(d),
+                            BackgroundColor(Color::srgb(0.18, 0.18, 0.20)),
+                            Node {
+                                width: Val::Px(150.0),
+                                height: Val::Px(46.0),
+                                align_items: AlignItems::Center,
+                                justify_content: JustifyContent::Center,
+                                border_radius: BorderRadius::all(Val::Px(12.0)),
+                                ..default()
+                            },
+                        ))
+                        .with_child((
+                            GameOverEntity,
+                            Text::new(d.label()),
+                            TextFont {
+                                font_size: 20.0,
+                                ..default()
+                            },
+                            TextColor(Color::WHITE),
+                        ));
+                    }
+                });
+
+                // Action buttons
+                card.spawn((
+                    GameOverEntity,
+                    Node {
+                        flex_direction: FlexDirection::Row,
+                        column_gap: Val::Px(12.0),
                         margin: UiRect::top(Val::Px(10.0)),
                         ..default()
                     },
@@ -637,13 +755,41 @@ fn setup_game_over(mut commands: Commands, score: Res<Score>) {
                             height: Val::Px(56.0),
                             align_items: AlignItems::Center,
                             justify_content: JustifyContent::Center,
+                            border_radius: BorderRadius::all(Val::Px(12.0)),
                             ..default()
                         },
                     ))
                     .with_child((
                         GameOverEntity,
-                        Text::new("Replay"),
-                        TextFont { font_size: 28.0, ..default() },
+                        Text::new("Play Again"),
+                        TextFont {
+                            font_size: 22.0,
+                            ..default()
+                        },
+                        TextColor(Color::WHITE),
+                    ));
+
+                    row.spawn((
+                        GameOverEntity,
+                        Button,
+                        BackToMenuButton,
+                        BackgroundColor(Color::srgb(0.18, 0.18, 0.20)),
+                        Node {
+                            width: Val::Px(180.0),
+                            height: Val::Px(56.0),
+                            align_items: AlignItems::Center,
+                            justify_content: JustifyContent::Center,
+                            border_radius: BorderRadius::all(Val::Px(12.0)),
+                            ..default()
+                        },
+                    ))
+                    .with_child((
+                        GameOverEntity,
+                        Text::new("Menu"),
+                        TextFont {
+                            font_size: 22.0,
+                            ..default()
+                        },
                         TextColor(Color::WHITE),
                     ));
 
@@ -653,20 +799,34 @@ fn setup_game_over(mut commands: Commands, score: Res<Score>) {
                         QuitButton,
                         BackgroundColor(Color::srgb(0.18, 0.18, 0.20)),
                         Node {
-                            width: Val::Px(180.0),
+                            width: Val::Px(140.0),
                             height: Val::Px(56.0),
                             align_items: AlignItems::Center,
                             justify_content: JustifyContent::Center,
+                            border_radius: BorderRadius::all(Val::Px(12.0)),
                             ..default()
                         },
                     ))
                     .with_child((
                         GameOverEntity,
                         Text::new("Quit"),
-                        TextFont { font_size: 28.0, ..default() },
+                        TextFont {
+                            font_size: 22.0,
+                            ..default()
+                        },
                         TextColor(Color::WHITE),
                     ));
                 });
+
+                card.spawn((
+                    GameOverEntity,
+                    Text::new("Keys: Enter/R = Play Again    M = Menu    Esc/Q = Quit"),
+                    TextFont {
+                        font_size: 16.0,
+                        ..default()
+                    },
+                    TextColor(Color::srgb(0.75, 0.75, 0.78)),
+                ));
             });
         });
 }
@@ -681,8 +841,12 @@ fn game_over_input_keys(
         return;
     }
 
-    if keys.just_pressed(KeyCode::KeyR) {
+    if keys.just_pressed(KeyCode::Enter) || keys.just_pressed(KeyCode::KeyR) {
         next_state.set(GameState::Countdown);
+    }
+
+    if keys.just_pressed(KeyCode::KeyM) {
+        next_state.set(GameState::Menu);
     }
 
     if keys.just_pressed(KeyCode::KeyQ) || keys.just_pressed(KeyCode::Escape) {
@@ -693,9 +857,16 @@ fn game_over_input_keys(
 fn game_over_buttons(
     state: Res<State<GameState>>,
     mut q: Query<
-        (&Interaction, &mut BackgroundColor, Option<&ReplayButton>, Option<&QuitButton>),
+        (
+            &Interaction,
+            Option<&ReplayButton>,
+            Option<&QuitButton>,
+            Option<&BackToMenuButton>,
+            Option<&DifficultyChoiceButton>,
+        ),
         (Changed<Interaction>, With<Button>, With<GameOverEntity>),
     >,
+    mut config: ResMut<GameConfig>,
     mut next_state: ResMut<NextState<GameState>>,
     mut exit: MessageWriter<AppExit>,
 ) {
@@ -703,18 +874,66 @@ fn game_over_buttons(
         return;
     }
 
-    for (i, mut bg, replay, quit) in &mut q {
-        match *i {
-            Interaction::Pressed => {
-                if replay.is_some() {
-                    next_state.set(GameState::Countdown);
-                } else if quit.is_some() {
-                    exit.write(AppExit::Success);
-                }
-            }
-            Interaction::Hovered => *bg = BackgroundColor(Color::srgb(0.24, 0.24, 0.26)),
-            Interaction::None => *bg = BackgroundColor(Color::srgb(0.18, 0.18, 0.20)),
+    for (i, replay, quit, menu, diff) in &mut q {
+        if *i != Interaction::Pressed {
+            continue;
         }
+
+        if let Some(d) = diff {
+            config.difficulty = d.0;
+            continue;
+        }
+
+        if replay.is_some() {
+            next_state.set(GameState::Countdown);
+        } else if menu.is_some() {
+            next_state.set(GameState::Menu);
+        } else if quit.is_some() {
+            exit.write(AppExit::Success);
+        }
+    }
+}
+
+fn game_over_visuals(
+    state: Res<State<GameState>>,
+    config: Res<GameConfig>,
+    mut q: Query<
+        (
+            &Interaction,
+            &mut BackgroundColor,
+            Option<&ReplayButton>,
+            Option<&QuitButton>,
+            Option<&BackToMenuButton>,
+            Option<&DifficultyChoiceButton>,
+        ),
+        (With<Button>, With<GameOverEntity>),
+    >,
+) {
+    if *state.get() != GameState::GameOver {
+        return;
+    }
+
+    for (interaction, mut bg, replay, quit, menu, diff) in &mut q {
+        let base = if replay.is_some() || quit.is_some() || menu.is_some() {
+            Color::srgb(0.18, 0.18, 0.20)
+        } else if let Some(d) = diff {
+            if d.0 == config.difficulty {
+                Color::srgb(0.26, 0.26, 0.30)
+            } else {
+                Color::srgb(0.16, 0.16, 0.18)
+            }
+        } else {
+            Color::srgb(0.18, 0.18, 0.20)
+        };
+
+        let hovered = Color::srgb(0.24, 0.24, 0.26);
+        let pressed = Color::srgb(0.28, 0.28, 0.31);
+
+        *bg = BackgroundColor(match *interaction {
+            Interaction::Pressed => pressed,
+            Interaction::Hovered => hovered,
+            Interaction::None => base,
+        });
     }
 }
 
