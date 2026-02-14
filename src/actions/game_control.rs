@@ -1,5 +1,6 @@
-use bevy::prelude::{ButtonInput, KeyCode, Res};
+use bevy::prelude::{ButtonInput, KeyCode};
 
+#[derive(Debug, Clone, Copy)]
 pub enum GameControl {
     Up,
     Down,
@@ -8,7 +9,7 @@ pub enum GameControl {
 }
 
 impl GameControl {
-    pub fn pressed(&self, keyboard_input: &Res<ButtonInput<KeyCode>>) -> bool {
+    pub fn pressed(self, keyboard_input: &ButtonInput<KeyCode>) -> bool {
         match self {
             GameControl::Up => {
                 keyboard_input.pressed(KeyCode::KeyW) || keyboard_input.pressed(KeyCode::ArrowUp)
@@ -26,6 +27,6 @@ impl GameControl {
     }
 }
 
-pub fn get_movement(control: GameControl, input: &Res<ButtonInput<KeyCode>>) -> f32 {
+pub fn get_movement(control: GameControl, input: &ButtonInput<KeyCode>) -> f32 {
     if control.pressed(input) { 1.0 } else { 0.0 }
 }

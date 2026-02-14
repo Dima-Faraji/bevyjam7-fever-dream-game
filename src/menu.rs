@@ -1,5 +1,6 @@
 use bevy::app::AppExit;
 use bevy::ecs::message::MessageWriter;
+use bevy::ecs::schedule::IntoScheduleConfigs; // <-- IMPORTANT for .run_if(...)
 use bevy::prelude::*;
 
 use crate::{Difficulty, GameConfig, GameState};
@@ -8,6 +9,15 @@ pub struct MenuPlugin;
 
 #[derive(Component)]
 struct MenuTag;
+
+#[derive(Component)]
+struct TitleText;
+
+#[derive(Component)]
+struct TitleGlow;
+
+#[derive(Component)]
+struct NameBox;
 
 #[derive(Component)]
 struct NameText;
@@ -42,72 +52,156 @@ fn setup_menu(mut commands: Commands, config: Res<GameConfig>) {
                 align_items: AlignItems::Center,
                 ..default()
             },
-            BackgroundColor(Color::srgb(0.06, 0.06, 0.07)),
+            BackgroundColor(Color::srgb(0.05, 0.05, 0.06)),
         ))
         .with_children(|root| {
+            // Background “dream blobs” (purely decorative)
+            root.spawn((
+                MenuTag,
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(-180.0),
+                    top: Val::Px(-220.0),
+                    width: Val::Px(620.0),
+                    height: Val::Px(620.0),
+                    border_radius: BorderRadius::all(Val::Px(999.0)),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.85, 0.25, 0.95, 0.12)),
+            ));
+            root.spawn((
+                MenuTag,
+                Node {
+                    position_type: PositionType::Absolute,
+                    right: Val::Px(-220.0),
+                    bottom: Val::Px(-200.0),
+                    width: Val::Px(700.0),
+                    height: Val::Px(700.0),
+                    border_radius: BorderRadius::all(Val::Px(999.0)),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.20, 0.90, 0.95, 0.10)),
+            ));
+            root.spawn((
+                MenuTag,
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Percent(30.0),
+                    top: Val::Percent(55.0),
+                    width: Val::Px(360.0),
+                    height: Val::Px(360.0),
+                    border_radius: BorderRadius::all(Val::Px(999.0)),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.95, 0.35, 0.55, 0.08)),
+            ));
+
             // Card
             root.spawn((
                 MenuTag,
                 Node {
-                    width: Val::Px(720.0),
+                    width: Val::Px(760.0),
                     padding: UiRect::all(Val::Px(28.0)),
                     flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(16.0),
+                    row_gap: Val::Px(14.0),
                     border: UiRect::all(Val::Px(2.0)),
-                    border_radius: BorderRadius::all(Val::Px(16.0)),
+                    border_radius: BorderRadius::all(Val::Px(18.0)),
                     ..default()
                 },
-                BackgroundColor(Color::srgb(0.10, 0.10, 0.12)),
-                BorderColor::all(Color::srgb(0.20, 0.20, 0.24)),
+                BackgroundColor(Color::srgb(0.09, 0.09, 0.11)),
+                BorderColor::all(Color::srgb(0.22, 0.22, 0.28)),
             ))
             .with_children(|card| {
+                // Title area (glow + main)
                 card.spawn((
                     MenuTag,
-                    Text::new("Fever Dream"),
-                    TextFont {
-                        font_size: 78.0,
+                    Node {
+                        width: Val::Percent(100.0),
+                        height: Val::Px(90.0),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
                         ..default()
                     },
-                    TextColor(Color::WHITE),
+                ))
+                .with_children(|t| {
+                    t.spawn((
+                        MenuTag,
+                        TitleGlow,
+                        Text::new("✦ FEVER DREAM ✦"),
+                        TextFont {
+                            font_size: 74.0,
+                            ..default()
+                        },
+                        TextColor(Color::srgba(0.85, 0.25, 0.95, 0.45)),
+                        Node {
+                            position_type: PositionType::Absolute,
+                            left: Val::Px(4.0),
+                            top: Val::Px(3.0),
+                            ..default()
+                        },
+                    ));
+
+                    t.spawn((
+                        MenuTag,
+                        TitleText,
+                        Text::new("✦ FEVER DREAM ✦"),
+                        TextFont {
+                            font_size: 74.0,
+                            ..default()
+                        },
+                        TextColor(Color::srgb(0.95, 0.95, 0.98)),
+                    ));
+                });
+
+                // Divider line (neon)
+                card.spawn((
+                    MenuTag,
+                    Node {
+                        width: Val::Percent(100.0),
+                        height: Val::Px(2.0),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgba(0.20, 0.90, 0.95, 0.35)),
                 ));
 
                 card.spawn((
                     MenuTag,
                     Text::new(
-                        "Collect the memories before time runs out.\nWASD/Arrows to move.  1/2/3 to change mood.",
+                        "Collect the memories before time runs out.\nWASD/Arrows to move • 1/2/3 to change mood",
                     ),
                     TextFont {
                         font_size: 20.0,
                         ..default()
                     },
-                    TextColor(Color::srgb(0.86, 0.86, 0.88)),
+                    TextColor(Color::srgb(0.86, 0.86, 0.90)),
                 ));
 
                 // Name label
                 card.spawn((
                     MenuTag,
-                    Text::new("Player name"),
+                    Text::new("PLAYER NAME"),
                     TextFont {
-                        font_size: 18.0,
+                        font_size: 16.0,
                         ..default()
                     },
-                    TextColor(Color::srgb(0.78, 0.78, 0.80)),
+                    TextColor(Color::srgb(0.76, 0.76, 0.80)),
                 ));
 
                 // Name input box
                 card.spawn((
                     MenuTag,
+                    NameBox,
                     Node {
                         width: Val::Percent(100.0),
-                        height: Val::Px(52.0),
+                        height: Val::Px(54.0),
                         padding: UiRect::horizontal(Val::Px(14.0)),
                         align_items: AlignItems::Center,
                         border: UiRect::all(Val::Px(1.0)),
-                        border_radius: BorderRadius::all(Val::Px(12.0)),
+                        border_radius: BorderRadius::all(Val::Px(14.0)),
                         ..default()
                     },
-                    BackgroundColor(Color::srgb(0.14, 0.14, 0.16)),
-                    BorderColor::all(Color::srgb(0.22, 0.22, 0.26)),
+                    BackgroundColor(Color::srgb(0.12, 0.12, 0.14)),
+                    BorderColor::all(Color::srgb(0.22, 0.22, 0.28)),
                 ))
                 .with_children(|row| {
                     let shown = if config.player_name.trim().is_empty() {
@@ -124,19 +218,19 @@ fn setup_menu(mut commands: Commands, config: Res<GameConfig>) {
                             font_size: 22.0,
                             ..default()
                         },
-                        TextColor(Color::srgb(0.92, 0.92, 0.94)),
+                        TextColor(Color::srgb(0.93, 0.93, 0.96)),
                     ));
                 });
 
                 // Difficulty label
                 card.spawn((
                     MenuTag,
-                    Text::new("Difficulty"),
+                    Text::new("DIFFICULTY"),
                     TextFont {
-                        font_size: 18.0,
+                        font_size: 16.0,
                         ..default()
                     },
-                    TextColor(Color::srgb(0.78, 0.78, 0.80)),
+                    TextColor(Color::srgb(0.76, 0.76, 0.80)),
                 ));
 
                 // Difficulty buttons
@@ -150,25 +244,31 @@ fn setup_menu(mut commands: Commands, config: Res<GameConfig>) {
                 ))
                 .with_children(|row| {
                     for d in [Difficulty::Easy, Difficulty::Normal, Difficulty::Hard] {
+                        let icon = match d {
+                            Difficulty::Easy => "◆",
+                            Difficulty::Normal => "◇",
+                            Difficulty::Hard => "✹",
+                        };
+
                         row.spawn((
                             MenuTag,
                             Button,
                             DifficultyButton(d),
                             Node {
-                                width: Val::Px(160.0),
-                                height: Val::Px(48.0),
+                                width: Val::Px(170.0),
+                                height: Val::Px(50.0),
                                 justify_content: JustifyContent::Center,
                                 align_items: AlignItems::Center,
                                 border: UiRect::all(Val::Px(1.0)),
-                                border_radius: BorderRadius::all(Val::Px(12.0)),
+                                border_radius: BorderRadius::all(Val::Px(14.0)),
                                 ..default()
                             },
-                            BackgroundColor(Color::srgb(0.16, 0.16, 0.18)),
-                            BorderColor::all(Color::srgb(0.22, 0.22, 0.26)),
+                            BackgroundColor(Color::srgb(0.14, 0.14, 0.16)),
+                            BorderColor::all(Color::srgb(0.22, 0.22, 0.28)),
                         ))
                         .with_child((
                             MenuTag,
-                            Text::new(d.label()),
+                            Text::new(format!("{icon}  {}", d.label())),
                             TextFont {
                                 font_size: 20.0,
                                 ..default()
@@ -194,22 +294,22 @@ fn setup_menu(mut commands: Commands, config: Res<GameConfig>) {
                         Button,
                         StartButton,
                         Node {
-                            width: Val::Px(220.0),
-                            height: Val::Px(56.0),
+                            width: Val::Px(240.0),
+                            height: Val::Px(58.0),
                             justify_content: JustifyContent::Center,
                             align_items: AlignItems::Center,
                             border: UiRect::all(Val::Px(1.0)),
-                            border_radius: BorderRadius::all(Val::Px(12.0)),
+                            border_radius: BorderRadius::all(Val::Px(14.0)),
                             ..default()
                         },
-                        BackgroundColor(Color::srgb(0.18, 0.18, 0.20)),
-                        BorderColor::all(Color::srgb(0.22, 0.22, 0.26)),
+                        BackgroundColor(Color::srgb(0.12, 0.18, 0.20)),
+                        BorderColor::all(Color::srgb(0.22, 0.22, 0.28)),
                     ))
                     .with_child((
                         MenuTag,
-                        Text::new("Start"),
+                        Text::new("START DREAM"),
                         TextFont {
-                            font_size: 26.0,
+                            font_size: 24.0,
                             ..default()
                         },
                         TextColor(Color::WHITE),
@@ -220,22 +320,22 @@ fn setup_menu(mut commands: Commands, config: Res<GameConfig>) {
                         Button,
                         QuitButton,
                         Node {
-                            width: Val::Px(160.0),
-                            height: Val::Px(56.0),
+                            width: Val::Px(170.0),
+                            height: Val::Px(58.0),
                             justify_content: JustifyContent::Center,
                             align_items: AlignItems::Center,
                             border: UiRect::all(Val::Px(1.0)),
-                            border_radius: BorderRadius::all(Val::Px(12.0)),
+                            border_radius: BorderRadius::all(Val::Px(14.0)),
                             ..default()
                         },
-                        BackgroundColor(Color::srgb(0.18, 0.18, 0.20)),
-                        BorderColor::all(Color::srgb(0.22, 0.22, 0.26)),
+                        BackgroundColor(Color::srgb(0.16, 0.12, 0.14)),
+                        BorderColor::all(Color::srgb(0.22, 0.22, 0.28)),
                     ))
                     .with_child((
                         MenuTag,
-                        Text::new("Quit"),
+                        Text::new("QUIT"),
                         TextFont {
-                            font_size: 26.0,
+                            font_size: 24.0,
                             ..default()
                         },
                         TextColor(Color::WHITE),
@@ -249,7 +349,7 @@ fn setup_menu(mut commands: Commands, config: Res<GameConfig>) {
                         font_size: 16.0,
                         ..default()
                     },
-                    TextColor(Color::srgb(0.70, 0.70, 0.73)),
+                    TextColor(Color::srgb(0.70, 0.70, 0.74)),
                 ));
             });
         });
@@ -340,41 +440,106 @@ fn menu_buttons(
 }
 
 fn menu_visuals(
+    time: Res<Time>,
     config: Res<GameConfig>,
-    mut q: Query<
+    mut q_buttons: Query<
         (
             &Interaction,
             &mut BackgroundColor,
+            &mut BorderColor,
             Option<&StartButton>,
             Option<&QuitButton>,
             Option<&DifficultyButton>,
         ),
         With<Button>,
     >,
+    mut q_name_box: Query<&mut BorderColor, (With<NameBox>, Without<Button>)>,
+    mut q_title: Query<&mut TextColor, (With<TitleText>, Without<TitleGlow>)>,
+    mut q_glow: Query<&mut TextColor, (With<TitleGlow>, Without<TitleText>)>,
 ) {
-    let hovered = Color::srgb(0.24, 0.24, 0.27);
-    let pressed = Color::srgb(0.28, 0.28, 0.32);
+    // Palette
+    let dim_border = Color::srgb(0.22, 0.22, 0.28);
+    let cyan = Color::srgb(0.20, 0.90, 0.95);
+    let purple = Color::srgb(0.85, 0.25, 0.95);
+    let red = Color::srgb(0.95, 0.35, 0.45);
+    let green = Color::srgb(0.35, 0.92, 0.55);
 
-    for (i, mut bg, start, quit, diff) in &mut q {
-        let mut base = Color::srgb(0.18, 0.18, 0.20);
+    // Subtle pulse for title + name box border
+    let pulse = (time.elapsed_secs() * 1.3).sin() * 0.5 + 0.5;
+    let title_main = Color::srgb(
+        lerp(0.95, 0.20, pulse),
+        lerp(0.95, 0.90, pulse),
+        lerp(0.98, 0.95, pulse),
+    );
+    let title_glow = Color::srgba(
+        lerp(0.85, 0.20, pulse),
+        lerp(0.25, 0.90, pulse),
+        lerp(0.95, 0.95, pulse),
+        lerp(0.35, 0.55, pulse),
+    );
+
+    for mut c in &mut q_title {
+        c.0 = title_main;
+    }
+    for mut c in &mut q_glow {
+        c.0 = title_glow;
+    }
+
+    // Name box pulse border
+    let name_border = Color::srgb(
+        lerp(0.22, 0.35, pulse),
+        lerp(0.22, 0.85, pulse),
+        lerp(0.28, 0.95, pulse),
+    );
+    for mut bc in &mut q_name_box {
+        *bc = BorderColor::all(name_border);
+    }
+
+    // Buttons
+    let hovered_bg = Color::srgb(0.20, 0.20, 0.24);
+    let pressed_bg = Color::srgb(0.24, 0.24, 0.30);
+
+    for (i, mut bg, mut border, start, quit, diff) in &mut q_buttons {
+        // Defaults
+        let mut base_bg = Color::srgb(0.14, 0.14, 0.16);
+        let mut base_border = dim_border;
 
         if start.is_some() {
-            base = Color::srgb(0.20, 0.20, 0.22);
+            base_bg = Color::srgb(0.12, 0.18, 0.20);
+            base_border = Color::srgb(0.20, 0.60, 0.65);
         } else if quit.is_some() {
-            base = Color::srgb(0.18, 0.18, 0.20);
+            base_bg = Color::srgb(0.16, 0.12, 0.14);
+            base_border = Color::srgb(0.55, 0.22, 0.28);
         } else if let Some(d) = diff {
-            base = if d.0 == config.difficulty {
-                Color::srgb(0.26, 0.26, 0.30)
-            } else {
-                Color::srgb(0.16, 0.16, 0.18)
+            let accent = match d.0 {
+                Difficulty::Easy => green,
+                Difficulty::Normal => cyan,
+                Difficulty::Hard => red,
             };
+
+            if d.0 == config.difficulty {
+                base_bg = Color::srgb(0.16, 0.16, 0.20);
+                base_border = accent;
+            } else {
+                base_bg = Color::srgb(0.13, 0.13, 0.15);
+                base_border = dim_border;
+            }
         }
 
-        *bg = BackgroundColor(match *i {
-            Interaction::Pressed => pressed,
-            Interaction::Hovered => hovered,
-            Interaction::None => base,
-        });
+        match *i {
+            Interaction::Pressed => {
+                bg.0 = pressed_bg;
+                *border = BorderColor::all(purple);
+            }
+            Interaction::Hovered => {
+                bg.0 = hovered_bg;
+                *border = BorderColor::all(cyan);
+            }
+            Interaction::None => {
+                bg.0 = base_bg;
+                *border = BorderColor::all(base_border);
+            }
+        }
     }
 }
 
@@ -426,4 +591,8 @@ fn keycode_to_char(key: KeyCode, shift: bool) -> Option<char> {
     };
 
     Some(if shift { c.to_ascii_uppercase() } else { c })
+}
+
+fn lerp(a: f32, b: f32, t: f32) -> f32 {
+    a + (b - a) * t
 }
